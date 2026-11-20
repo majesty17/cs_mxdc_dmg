@@ -1,12 +1,14 @@
 ﻿using System.Text;
 using static System.Net.Mime.MediaTypeNames;
+using System.Text.Json;
 
 namespace cs_mxdc_dmg
 {
     public partial class Form_main : Form
     {
         private bool initOK = false;
-
+        private static readonly HttpClient httpClient = new HttpClient();
+        private string CONF = "config.ini";
 
         public Form_main()
         {
@@ -31,6 +33,8 @@ namespace cs_mxdc_dmg
             numericUpDown_me_lvl.Value = 62;
             checkBox_ski_shad.Checked = false;
 
+            loadFromConf();
+
             linkLabel_monster.LinkClicked += (s, args) =>
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -44,7 +48,7 @@ namespace cs_mxdc_dmg
         }
 
 
-        
+
         private void cal(object sender, EventArgs e)
         {
             if (!initOK) return;
@@ -53,7 +57,7 @@ namespace cs_mxdc_dmg
             int w4_min = (int)numericUpDown_4w_min.Value;
             int w4_yun = (int)numericUpDown_4w_yun.Value;
             int w4_zhi = (int)numericUpDown_4w_zhi.Value;
-            
+
             int watk_wp = (int)numericUpDown_watk_wp.Value;
 
             int watk_biao = -1;
@@ -72,11 +76,11 @@ namespace cs_mxdc_dmg
 
 
 
-                int watk_shoutao = (int)numericUpDown_watk_shoutao.Value;
+            int watk_shoutao = (int)numericUpDown_watk_shoutao.Value;
 
             int watk_link = (int)numericUpDown_watk_link.Value;
             int watk_poi = (int)numericUpDown_watk_poi.Value;
-            
+
             int me_lvl = (int)numericUpDown_me_lvl.Value;
             bool ski_shad = checkBox_ski_shad.Checked;
 
@@ -102,7 +106,7 @@ namespace cs_mxdc_dmg
 
             // 计算等级差系数
             int lvl_diff = Math.Max(0, mon_lvl - me_lvl);
-            double lvl_coeff = 1 - lvl_diff * 0.01  ;
+            double lvl_coeff = 1 - lvl_diff * 0.01;
 
 
             // 计算原始目标伤害，1.0是属性克制；
@@ -136,8 +140,8 @@ namespace cs_mxdc_dmg
                 all_max = (int)Math.Floor(final_dmg_crit_max) * 3;
             }
 
-            out_dmg =out_dmg + $"总伤害范围: {all_min} ~ {all_max} \n";
-            out_dmg= out_dmg+ getAna(all_min,all_max,hp: mon_hp);
+            out_dmg = out_dmg + $"总伤害范围: {all_min} ~ {all_max} \n";
+            out_dmg = out_dmg + getAna(all_min, all_max, hp: mon_hp);
 
 
             label_out_dmg.Text = out_dmg;
@@ -228,6 +232,198 @@ namespace cs_mxdc_dmg
             sb.AppendLine($"期望（平均）击杀次数: {expectedHits:F2} 次");
 
             return sb.ToString();
+        }
+
+        private async void button_mon_search_Click(object sender, EventArgs e)
+        {
+            string kw = textBox_kw.Text.Trim();
+            if (string.IsNullOrWhiteSpace(kw))
+            {
+                MessageBox.Show("请输入怪物名称");
+                return;
+            }
+
+            string url = $"https://mxdc.dvg.cn/api/mob-list.php?availability=open&q={Uri.EscapeDataString(kw)}&page=1&pageSize=100&sortKey=mobid&sortDir=asc";
+
+            button_mon_search.Enabled = false;
+            try
+            {
+                using HttpResponseMessage response = await httpClient.GetAsync(url);
+                response.EnsureSuccessStatusCode();
+
+                await using Stream responseStream = await response.Content.ReadAsStreamAsync();
+                using JsonDocument document = await JsonDocument.ParseAsync(responseStream);
+
+                if (!document.RootElement.TryGetProperty("items", out JsonElement data) || data.ValueKind != JsonValueKind.Array)
+                {
+                    throw new InvalidOperationException("接口返回的数据格式不正确。");
+                }
+
+                listView_mon_list.BeginUpdate();
+                try
+                {
+                    listView_mon_list.Items.Clear();
+                    foreach (JsonElement monster in data.EnumerateArray())
+                    {
+                        string name = monster.TryGetProperty("mobname", out JsonElement mobName)
+                            ? mobName.ToString() : string.Empty;
+                        string hp = monster.TryGetProperty("hp", out JsonElement monsterHp)
+                            ? monsterHp.ToString() : string.Empty;
+                        string pdd = monster.TryGetProperty("pdd", out JsonElement monsterPdd)
+                            ? monsterPdd.ToString() : string.Empty;
+                        string level = monster.TryGetProperty("level", out JsonElement monsterLevel)
+                            ? monsterLevel.ToString() : string.Empty;
+
+                        listView_mon_list.Items.Add(new ListViewItem(new[] { name, level, pdd, hp }));
+                    }
+                }
+                finally
+                {
+                    listView_mon_list.EndUpdate();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"搜索怪物失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                button_mon_search.Enabled = true;
+            }
+        }
+
+        private void listView_mon_list_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (listView_mon_list.SelectedItems.Count == 0)
+            {
+                return;
+            }
+
+            ListViewItem item = listView_mon_list.SelectedItems[0];
+            if (item.SubItems.Count < 4)
+            {
+                return;
+            }
+
+            if (decimal.TryParse(item.SubItems[1].Text, out decimal level))
+            {
+                numericUpDown_mon_lvl.Value = Math.Clamp(level, numericUpDown_mon_lvl.Minimum, numericUpDown_mon_lvl.Maximum);
+            }
+
+            if (decimal.TryParse(item.SubItems[2].Text, out decimal pdd))
+            {
+                numericUpDown_mon_wdef.Value = Math.Clamp(pdd, numericUpDown_mon_wdef.Minimum, numericUpDown_mon_wdef.Maximum);
+            }
+
+            if (decimal.TryParse(item.SubItems[3].Text, out decimal hp))
+            {
+                numericUpDown_mon_hp.Value = Math.Clamp(hp, numericUpDown_mon_hp.Minimum, numericUpDown_mon_hp.Maximum);
+            }
+        }
+
+
+
+        private void loadFromConf()
+        {
+            string confPath = Path.Combine(AppContext.BaseDirectory, CONF);
+            if (!File.Exists(confPath))
+            {
+                return;
+            }
+
+            try
+            {
+                foreach (string line in File.ReadAllLines(confPath, System.Text.Encoding.UTF8))
+                {
+                    int separatorIndex = line.IndexOf('=');
+                    if (separatorIndex <= 0)
+                    {
+                        continue;
+                    }
+
+                    string key = line[..separatorIndex];
+                    string value = line[(separatorIndex + 1)..];
+
+                    switch (key)
+                    {
+                        case "numericUpDown_4w_li": SetNumericValue(numericUpDown_4w_li, value); break;
+                        case "numericUpDown_4w_min": SetNumericValue(numericUpDown_4w_min, value); break;
+                        case "numericUpDown_4w_zhi": SetNumericValue(numericUpDown_4w_zhi, value); break;
+                        case "numericUpDown_4w_yun": SetNumericValue(numericUpDown_4w_yun, value); break;
+                        case "numericUpDown_watk_wp": SetNumericValue(numericUpDown_watk_wp, value); break;
+                        case "comboBox_watk_biao":
+                            if (int.TryParse(value, out int selectedIndex) &&
+                                selectedIndex >= -1 && selectedIndex < comboBox_watk_biao.Items.Count)
+                            {
+                                comboBox_watk_biao.SelectedIndex = selectedIndex;
+                            }
+                            break;
+                        case "numericUpDown_watk_shoutao": SetNumericValue(numericUpDown_watk_shoutao, value); break;
+                        case "numericUpDown_watk_link": SetNumericValue(numericUpDown_watk_link, value); break;
+                        case "numericUpDown_watk_poi": SetNumericValue(numericUpDown_watk_poi, value); break;
+                        case "numericUpDown_me_lvl": SetNumericValue(numericUpDown_me_lvl, value); break;
+                        case "checkBox_ski_shad":
+                            if (bool.TryParse(value, out bool checkedValue))
+                            {
+                                checkBox_ski_shad.Checked = checkedValue;
+                            }
+                            break;
+                        case "numericUpDown_mon_lvl": SetNumericValue(numericUpDown_mon_lvl, value); break;
+                        case "numericUpDown_mon_hp": SetNumericValue(numericUpDown_mon_hp, value); break;
+                        case "numericUpDown_mon_wdef": SetNumericValue(numericUpDown_mon_wdef, value); break;
+                        case "textBox_kw": textBox_kw.Text = value; break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"加载配置失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static void SetNumericValue(NumericUpDown control, string value)
+        {
+            if (decimal.TryParse(value, out decimal numericValue))
+            {
+                control.Value = Math.Clamp(numericValue, control.Minimum, control.Maximum);
+            }
+        }
+
+        private void saveToConf()
+        {
+            string confPath = Path.Combine(AppContext.BaseDirectory, CONF);
+            string[] configLines =
+            {
+                $"numericUpDown_4w_li={numericUpDown_4w_li.Value}",
+                $"numericUpDown_4w_min={numericUpDown_4w_min.Value}",
+                $"numericUpDown_4w_zhi={numericUpDown_4w_zhi.Value}",
+                $"numericUpDown_4w_yun={numericUpDown_4w_yun.Value}",
+                $"numericUpDown_watk_wp={numericUpDown_watk_wp.Value}",
+                $"comboBox_watk_biao={comboBox_watk_biao.SelectedIndex}",
+                $"numericUpDown_watk_shoutao={numericUpDown_watk_shoutao.Value}",
+                $"numericUpDown_watk_link={numericUpDown_watk_link.Value}",
+                $"numericUpDown_watk_poi={numericUpDown_watk_poi.Value}",
+                $"numericUpDown_me_lvl={numericUpDown_me_lvl.Value}",
+                $"checkBox_ski_shad={checkBox_ski_shad.Checked}",
+                $"numericUpDown_mon_lvl={numericUpDown_mon_lvl.Value}",
+                $"numericUpDown_mon_hp={numericUpDown_mon_hp.Value}",
+                $"numericUpDown_mon_wdef={numericUpDown_mon_wdef.Value}",
+                $"textBox_kw={textBox_kw.Text}"
+            };
+
+            try
+            {
+                File.WriteAllLines(confPath, configLines, System.Text.Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"保存配置失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void Form_main_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            saveToConf();
         }
     }
 }
